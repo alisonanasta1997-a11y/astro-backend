@@ -42,12 +42,11 @@ def natal():
         lng    = float(data['lng'])
         tz_str = data.get('tz_str', 'UTC')
 
-        # kerykeion 5.x — правильные параметры
         subject = AstrologicalSubjectFactory.from_birth_data(
             name=name, year=year, month=month, day=day,
             hour=hour, minute=minute,
             lat=lat, lng=lng, tz_str=tz_str,
-            houses_system_identifier="K",  # Koch
+            houses_system_identifier="K",
             online=False
         )
 
@@ -60,14 +59,20 @@ def natal():
                     "degree":round(pos,4),"norm_degree":round(pos%30,4),
                     "house":house,"retrograde":retro}
 
+        # Находим узел — пробуем разные варианты названия
+        node = (getattr(subject,'true_node', None) or
+                getattr(subject,'mean_node', None) or
+                getattr(subject,'north_node', None))
+
         planets = [
             fmt(subject.sun,"Sun"), fmt(subject.moon,"Moon"),
             fmt(subject.mercury,"Mercury"), fmt(subject.venus,"Venus"),
             fmt(subject.mars,"Mars"), fmt(subject.jupiter,"Jupiter"),
             fmt(subject.saturn,"Saturn"), fmt(subject.uranus,"Uranus"),
             fmt(subject.neptune,"Neptune"), fmt(subject.pluto,"Pluto"),
-            fmt(subject.true_node,"North Node"),
         ]
+        if node:
+            planets.append(fmt(node,"North Node"))
 
         house_attrs = ['first_house','second_house','third_house','fourth_house',
                        'fifth_house','sixth_house','seventh_house','eighth_house',

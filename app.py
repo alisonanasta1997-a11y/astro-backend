@@ -28,43 +28,52 @@ SIGN_RU = {
 def health():
     return jsonify({"status": "ok"})
 
-# ── Прокси для Claude API ──────────────────────────────────────
+# ── Прокси для Groq API ────────────────────────────────────────
 @app.route('/chat', methods=['POST','OPTIONS'])
 def chat():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     try:
         data = request.json
-        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        api_key = os.environ.get('GROQ_API_KEY', '')
         if not api_key:
-            return jsonify({"error": "ANTHROPIC_API_KEY не настроен на сервере"}), 500
+            return jsonify({"error": "GROQ_API_KEY не настроен на сервере"}), 500
+
+        # Конвертируем формат Claude → Groq (OpenAI-совместимый)
+        messages = []
+        system = data.get('system', '')
+        if system:
+            messages.append({"role": "system", "content": system})
+        for m in data.get('messages', []):
+            messages.append({"role": m['role'], "content": m['content']})
 
         resp = requests.post(
-            'https://api.anthropic.com/v1/messages',
+            'https://api.groq.com/openai/v1/chat/completions',
             headers={
                 'Content-Type': 'application/json',
-                'x-api-key': api_key,
-                'anthropic-version': '2023-06-01'
+                'Authorization': f'Bearer {api_key}'
             },
-            json=data,
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": messages,
+                "max_tokens": 1000,
+                "temperature": 0.7
+            },
             timeout=60
         )
-        return jsonify(resp.json()), resp.status_code
+        result = resp.json()
+
+        # Конвертируем ответ Groq → формат Claude
+        if 'choices' in result:
+            text = result['choices'][0]['message']['content']
+            return jsonify({"content": [{"type": "text", "text": text}]})
+        else:
+            return jsonify({"error": str(result)}), 500
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # ── Натальная карта ────────────────────────────────────────────
-@app.route('/debug', methods=['GET'])
-def debug():
-    subject = AstrologicalSubjectFactory.from_birth_data(
-        name="Test", year=1997, month=1, day=2,
-        hour=20, minute=14, lat=57.005, lng=86.1472,
-        tz_str="Asia/Krasnoyarsk",
-        houses_system_identifier="K", online=False
-    )
-    attrs = [a for a in dir(subject) if not a.startswith('_')]
-    return jsonify({"all_attributes": attrs, "sun_sign": subject.sun.sign})
-
 @app.route('/natal', methods=['POST','OPTIONS'])
 def natal():
     if request.method == 'OPTIONS':

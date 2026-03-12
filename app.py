@@ -1,3 +1,5 @@
+import os
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kerykeion import AstrologicalSubjectFactory
@@ -25,6 +27,43 @@ SIGN_RU = {
 @app.route('/health', methods=['GET','OPTIONS'])
 def health():
     return jsonify({"status": "ok"})
+
+# ── Прокси для Claude API ──────────────────────────────────────
+@app.route('/chat', methods=['POST','OPTIONS'])
+def chat():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    try:
+        data = request.json
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            return jsonify({"error": "ANTHROPIC_API_KEY не настроен на сервере"}), 500
+
+        resp = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01'
+            },
+            json=data,
+            timeout=60
+        )
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ── Натальная карта ────────────────────────────────────────────
+@app.route('/debug', methods=['GET'])
+def debug():
+    subject = AstrologicalSubjectFactory.from_birth_data(
+        name="Test", year=1997, month=1, day=2,
+        hour=20, minute=14, lat=57.005, lng=86.1472,
+        tz_str="Asia/Krasnoyarsk",
+        houses_system_identifier="K", online=False
+    )
+    attrs = [a for a in dir(subject) if not a.startswith('_')]
+    return jsonify({"all_attributes": attrs, "sun_sign": subject.sun.sign})
 
 @app.route('/natal', methods=['POST','OPTIONS'])
 def natal():
@@ -59,10 +98,9 @@ def natal():
                     "degree":round(pos,4),"norm_degree":round(pos%30,4),
                     "house":house,"retrograde":retro}
 
-        # Находим узел — пробуем разные варианты названия
-        node = (getattr(subject,'true_node', None) or
-                getattr(subject,'mean_node', None) or
-                getattr(subject,'north_node', None))
+        node = (getattr(subject,'true_node',None) or
+                getattr(subject,'mean_node',None) or
+                getattr(subject,'north_node',None))
 
         planets = [
             fmt(subject.sun,"Sun"), fmt(subject.moon,"Moon"),
@@ -79,9 +117,9 @@ def natal():
                        'ninth_house','tenth_house','eleventh_house','twelfth_house']
         houses = []
         for i,attr in enumerate(house_attrs,1):
-            h    = getattr(subject, attr)
-            sign = getattr(h, 'sign', '')
-            pos  = getattr(h, 'position', 0.0)
+            h = getattr(subject, attr)
+            sign = getattr(h,'sign','')
+            pos  = getattr(h,'position',0.0)
             houses.append({"house":i,"sign":sign,"sign_ru":SIGN_RU.get(sign,sign),"degree":round(pos,4)})
 
         ASPS = [("conjunction",0,8),("opposition",180,8),("trine",120,7),("square",90,7),("sextile",60,5)]
@@ -101,7 +139,7 @@ def natal():
         asc = subject.first_house
         mc  = subject.tenth_house
         return jsonify({
-            "planets":planets, "houses":houses, "aspects":aspects,
+            "planets":planets,"houses":houses,"aspects":aspects,
             "ascendant":{"sign":asc.sign,"sign_ru":SIGN_RU.get(asc.sign,asc.sign),"degree":round(asc.position,4)},
             "midheaven":{"sign":mc.sign,"sign_ru":SIGN_RU.get(mc.sign,mc.sign),"degree":round(mc.position,4)}
         })

@@ -3,6 +3,9 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kerykeion import AstrologicalSubjectFactory
+from timezonefinder import TimezoneFinder
+from datetime import datetime
+import pytz
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}},
@@ -24,9 +27,62 @@ SIGN_RU = {
     "Sagittarius":"Стрелец","Capricorn":"Козерог","Aquarius":"Водолей","Pisces":"Рыбы"
 }
 
+KNOWLEDGE_BASE = """
+=== БАЗА ЗНАНИЙ ПО АСТРОЛОГИИ ===
+(база знаний астролога — используй для консультаций)
+"""
+
 @app.route('/health', methods=['GET','OPTIONS'])
 def health():
     return jsonify({"status": "ok"})
+
+# ── Геокодирование ─────────────────────────────────────────────
+@app.route('/geocode', methods=['POST','OPTIONS'])
+def geocode():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    try:
+        data = request.json
+        city = data.get('city', '')
+        year = int(data.get('year', 2000))
+        month = int(data.get('month', 1))
+        day = int(data.get('day', 1))
+        hour = int(data.get('hour', 12))
+
+        # Геокодирование через Nominatim (OpenStreetMap)
+        resp = requests.get(
+            'https://nominatim.openstreetmap.org/search',
+            params={'q': city, 'format': 'json', 'limit': 1},
+            headers={'User-Agent': 'AstroConsultant/1.0'},
+            timeout=10
+        )
+        results = resp.json()
+        if not results:
+            return jsonify({"error": "Город не найден"}), 404
+
+        lat = float(results[0]['lat'])
+        lng = float(results[0]['lon'])
+        display_name = results[0]['display_name']
+
+        # Определяем timezone по координатам
+        tf = TimezoneFinder()
+        tz_str = tf.timezone_at(lat=lat, lng=lng) or 'UTC'
+
+        # Определяем точный UTC offset на дату рождения
+        tz = pytz.timezone(tz_str)
+        birth_dt = datetime(year, month, day, hour, 0)
+        offset = tz.utcoffset(birth_dt)
+        gmt = offset.total_seconds() / 3600
+
+        return jsonify({
+            "lat": round(lat, 4),
+            "lng": round(lng, 4),
+            "gmt": gmt,
+            "tz_str": tz_str,
+            "display_name": display_name
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ── Прокси для Groq API ────────────────────────────────────────
 @app.route('/chat', methods=['POST','OPTIONS'])
@@ -37,13 +93,12 @@ def chat():
         data = request.json
         api_key = os.environ.get('GROQ_API_KEY', '')
         if not api_key:
-            return jsonify({"error": "GROQ_API_KEY не настроен на сервере"}), 500
+            return jsonify({"error": "GROQ_API_KEY не настроен"}), 500
 
-        # Конвертируем формат Claude → Groq (OpenAI-совместимый)
         messages = []
         system = data.get('system', '')
-        if system:
-            messages.append({"role": "system", "content": system})
+        full_system = system + "\n\n" + KNOWLEDGE_BASE if system else KNOWLEDGE_BASE
+        messages.append({"role": "system", "content": full_system})
         for m in data.get('messages', []):
             messages.append({"role": m['role'], "content": m['content']})
 
@@ -62,14 +117,11 @@ def chat():
             timeout=60
         )
         result = resp.json()
-
-        # Конвертируем ответ Groq → формат Claude
         if 'choices' in result:
             text = result['choices'][0]['message']['content']
             return jsonify({"content": [{"type": "text", "text": text}]})
         else:
             return jsonify({"error": str(result)}), 500
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

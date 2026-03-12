@@ -3,7 +3,6 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from kerykeion import AstrologicalSubjectFactory
-from timezonefinder import TimezoneFinder
 from datetime import datetime
 import pytz
 
@@ -42,14 +41,14 @@ def geocode():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     try:
-        data = request.json
-        city = data.get('city', '')
-        year = int(data.get('year', 2000))
+        data  = request.json
+        city  = data.get('city', '')
+        year  = int(data.get('year', 2000))
         month = int(data.get('month', 1))
-        day = int(data.get('day', 1))
-        hour = int(data.get('hour', 12))
+        day   = int(data.get('day', 1))
+        hour  = int(data.get('hour', 12))
 
-        # Геокодирование через Nominatim (OpenStreetMap)
+        # Геокодирование через Nominatim
         resp = requests.get(
             'https://nominatim.openstreetmap.org/search',
             params={'q': city, 'format': 'json', 'limit': 1},
@@ -64,11 +63,15 @@ def geocode():
         lng = float(results[0]['lon'])
         display_name = results[0]['display_name']
 
-        # Определяем timezone по координатам
-        tf = TimezoneFinder()
-        tz_str = tf.timezone_at(lat=lat, lng=lng) or 'UTC'
+        # Определяем timezone через timeapi.io
+        tz_resp = requests.get(
+            f'https://timeapi.io/api/timezone/coordinate?latitude={lat}&longitude={lng}',
+            timeout=10
+        )
+        tz_data = tz_resp.json()
+        tz_str = tz_data.get('timeZone', 'UTC')
 
-        # Определяем точный UTC offset на дату рождения
+        # Точный UTC offset на дату рождения
         tz = pytz.timezone(tz_str)
         birth_dt = datetime(year, month, day, hour, 0)
         offset = tz.utcoffset(birth_dt)
@@ -79,7 +82,7 @@ def geocode():
             "lng": round(lng, 4),
             "gmt": gmt,
             "tz_str": tz_str,
-            "display_name": display_name
+            "display_name": display_name.split(',')[:3]
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -95,33 +98,20 @@ def chat():
         if not api_key:
             return jsonify({"error": "GROQ_API_KEY не настроен"}), 500
 
-        messages = []
-        system = data.get('system', '')
-        full_system = system + "\n\n" + KNOWLEDGE_BASE if system else KNOWLEDGE_BASE
-        messages.append({"role": "system", "content": full_system})
+        messages = [{"role": "system", "content": data.get('system', '') + "\n\n" + KNOWLEDGE_BASE}]
         for m in data.get('messages', []):
             messages.append({"role": m['role'], "content": m['content']})
 
         resp = requests.post(
             'https://api.groq.com/openai/v1/chat/completions',
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {api_key}'
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": messages,
-                "max_tokens": 1000,
-                "temperature": 0.7
-            },
+            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
+            json={"model": "llama-3.3-70b-versatile", "messages": messages, "max_tokens": 1000, "temperature": 0.7},
             timeout=60
         )
         result = resp.json()
         if 'choices' in result:
-            text = result['choices'][0]['message']['content']
-            return jsonify({"content": [{"type": "text", "text": text}]})
-        else:
-            return jsonify({"error": str(result)}), 500
+            return jsonify({"content": [{"type": "text", "text": result['choices'][0]['message']['content']}]})
+        return jsonify({"error": str(result)}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -146,65 +136,44 @@ def natal():
             name=name, year=year, month=month, day=day,
             hour=hour, minute=minute,
             lat=lat, lng=lng, tz_str=tz_str,
-            houses_system_identifier="K",
-            online=False
+            houses_system_identifier="K", online=False
         )
 
         def fmt(p, pname):
-            sign  = getattr(p, 'sign', '')
-            pos   = getattr(p, 'position', 0.0)
-            house = str(getattr(p, 'house', 1))
-            retro = bool(getattr(p, 'retrograde', False))
-            return {"name":pname,"sign":sign,"sign_ru":SIGN_RU.get(sign,sign),
-                    "degree":round(pos,4),"norm_degree":round(pos%30,4),
-                    "house":house,"retrograde":retro}
+            return {"name": pname, "sign": getattr(p,'sign',''), "sign_ru": SIGN_RU.get(getattr(p,'sign',''),''),
+                    "degree": round(getattr(p,'position',0.0),4), "norm_degree": round(getattr(p,'position',0.0)%30,4),
+                    "house": str(getattr(p,'house',1)), "retrograde": bool(getattr(p,'retrograde',False))}
 
-        node = (getattr(subject,'true_node',None) or
-                getattr(subject,'mean_node',None) or
-                getattr(subject,'north_node',None))
+        node = getattr(subject,'true_node',None) or getattr(subject,'mean_node',None) or getattr(subject,'north_node',None)
+        planets = [fmt(subject.sun,"Sun"), fmt(subject.moon,"Moon"), fmt(subject.mercury,"Mercury"),
+                   fmt(subject.venus,"Venus"), fmt(subject.mars,"Mars"), fmt(subject.jupiter,"Jupiter"),
+                   fmt(subject.saturn,"Saturn"), fmt(subject.uranus,"Uranus"), fmt(subject.neptune,"Neptune"),
+                   fmt(subject.pluto,"Pluto")]
+        if node: planets.append(fmt(node,"North Node"))
 
-        planets = [
-            fmt(subject.sun,"Sun"), fmt(subject.moon,"Moon"),
-            fmt(subject.mercury,"Mercury"), fmt(subject.venus,"Venus"),
-            fmt(subject.mars,"Mars"), fmt(subject.jupiter,"Jupiter"),
-            fmt(subject.saturn,"Saturn"), fmt(subject.uranus,"Uranus"),
-            fmt(subject.neptune,"Neptune"), fmt(subject.pluto,"Pluto"),
-        ]
-        if node:
-            planets.append(fmt(node,"North Node"))
-
-        house_attrs = ['first_house','second_house','third_house','fourth_house',
-                       'fifth_house','sixth_house','seventh_house','eighth_house',
-                       'ninth_house','tenth_house','eleventh_house','twelfth_house']
         houses = []
-        for i,attr in enumerate(house_attrs,1):
+        for i,attr in enumerate(['first_house','second_house','third_house','fourth_house','fifth_house','sixth_house',
+                                   'seventh_house','eighth_house','ninth_house','tenth_house','eleventh_house','twelfth_house'],1):
             h = getattr(subject, attr)
-            sign = getattr(h,'sign','')
-            pos  = getattr(h,'position',0.0)
-            houses.append({"house":i,"sign":sign,"sign_ru":SIGN_RU.get(sign,sign),"degree":round(pos,4)})
+            houses.append({"house":i,"sign":getattr(h,'sign',''),"sign_ru":SIGN_RU.get(getattr(h,'sign',''),''),"degree":round(getattr(h,'position',0.0),4)})
 
         ASPS = [("conjunction",0,8),("opposition",180,8),("trine",120,7),("square",90,7),("sextile",60,5)]
         lons = [(p["name"], p["degree"]) for p in planets]
         aspects = []
         for i in range(len(lons)):
-            for j in range(i+1, len(lons)):
+            for j in range(i+1,len(lons)):
                 diff = abs(lons[i][1]-lons[j][1])
-                if diff > 180: diff = 360-diff
+                if diff>180: diff=360-diff
                 for aname,aangle,aorb in ASPS:
-                    orb = abs(diff-aangle)
-                    if orb <= aorb:
-                        aspects.append({"planet1":lons[i][0],"planet2":lons[j][0],"type":aname,"orb":round(orb,2)})
-                        break
-        aspects.sort(key=lambda x: x['orb'])
+                    orb=abs(diff-aangle)
+                    if orb<=aorb:
+                        aspects.append({"planet1":lons[i][0],"planet2":lons[j][0],"type":aname,"orb":round(orb,2)}); break
+        aspects.sort(key=lambda x:x['orb'])
 
-        asc = subject.first_house
-        mc  = subject.tenth_house
-        return jsonify({
-            "planets":planets,"houses":houses,"aspects":aspects,
-            "ascendant":{"sign":asc.sign,"sign_ru":SIGN_RU.get(asc.sign,asc.sign),"degree":round(asc.position,4)},
-            "midheaven":{"sign":mc.sign,"sign_ru":SIGN_RU.get(mc.sign,mc.sign),"degree":round(mc.position,4)}
-        })
-
+        asc,mc = subject.first_house, subject.tenth_house
+        return jsonify({"planets":planets,"houses":houses,"aspects":aspects,
+            "ascendant":{"sign":asc.sign,"sign_ru":SIGN_RU.get(asc.sign,''),"degree":round(asc.position,4)},
+            "midheaven":{"sign":mc.sign,"sign_ru":SIGN_RU.get(mc.sign,''),"degree":round(mc.position,4)}})
     except Exception as e:
         import traceback
         return jsonify({"error":str(e),"trace":traceback.format_exc()}), 500

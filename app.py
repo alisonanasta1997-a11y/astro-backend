@@ -18,6 +18,22 @@ SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsIn
 def health():
     return jsonify({"status": "ok"})
 
+@app.route('/debug', methods=['GET'])
+def debug():
+    try:
+        from kerykeion import AstrologicalSubject
+        s = AstrologicalSubject("Test", 1997, 1, 2, 20, 14, lat=56.9992, lng=86.1417, tz_str="Asia/Krasnoyarsk", houses_system_identifier="K")
+        attrs = [a for a in dir(s) if not a.startswith('_')]
+        sun_attrs = {}
+        try:
+            sun = s.sun
+            sun_attrs = {k: str(getattr(sun,k,'?')) for k in ['name','sign','abs_pos','position','house_name','retrograde'] if hasattr(sun,k)}
+        except Exception as e:
+            sun_attrs = {"error": str(e)}
+        return jsonify({"attrs_sample": attrs[:30], "sun": sun_attrs})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 # ── Поиск в базе знаний ────────────────────────────────────────
 def search_knowledge(query, limit=4):
     """Полнотекстовый поиск по базе Шестопалова"""

@@ -1,182 +1,225 @@
-import os
-import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from kerykeion import AstrologicalSubjectFactory
-from datetime import datetime
+from kerykeion import AstrologicalSubject, KerykeionChartSVG
+import requests
 import pytz
+from datetime import datetime
+import os
+import re
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}},
-     allow_headers=["Content-Type"], methods=["GET","POST","OPTIONS"])
+CORS(app)
 
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
-    return response
+GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
+SUPABASE_URL  = "https://cjtcggqrlbrcuuslgzmz.supabase.co"
+SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqdGNnZ3FybGJyY3V1c2xnem16Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzOTkxNjAsImV4cCI6MjA4ODk3NTE2MH0.1rj5AdbAj7foEKiQI0eJFgJvzk1-_BlaEJQdLD0zZqM"
 
-SIGN_RU = {
-    "Ari":"Овен","Tau":"Телец","Gem":"Близнецы","Can":"Рак",
-    "Leo":"Лев","Vir":"Дева","Lib":"Весы","Sco":"Скорпион",
-    "Sag":"Стрелец","Cap":"Козерог","Aqu":"Водолей","Pis":"Рыбы",
-    "Aries":"Овен","Taurus":"Телец","Gemini":"Близнецы","Cancer":"Рак",
-    "Virgo":"Дева","Libra":"Весы","Scorpio":"Скорпион",
-    "Sagittarius":"Стрелец","Capricorn":"Козерог","Aquarius":"Водолей","Pisces":"Рыбы"
-}
-
-KNOWLEDGE_BASE = """
-=== БАЗА ЗНАНИЙ ПО АСТРОЛОГИИ ===
-(база знаний астролога — используй для консультаций)
-"""
-
-@app.route('/health', methods=['GET','OPTIONS'])
+@app.route('/health')
 def health():
     return jsonify({"status": "ok"})
 
+# ── Поиск в базе знаний ────────────────────────────────────────
+def search_knowledge(query, limit=4):
+    """Полнотекстовый поиск по базе Шестопалова"""
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/rpc/search_chunks"
+        headers = {
+            "apikey": SUPABASE_ANON,
+            "Authorization": f"Bearer {SUPABASE_ANON}",
+            "Content-Type": "application/json"
+        }
+        r = requests.post(url, headers=headers, json={"query": query, "lim": limit}, timeout=5)
+        if r.status_code == 200:
+            results = r.json()
+            if results:
+                return "\n\n---\n\n".join([
+                    f"[{item['book']}, стр.{item['page']}]\n{item['text'][:600]}"
+                    for item in results
+                ])
+    except Exception as e:
+        print(f"Knowledge search error: {e}")
+    return ""
+
 # ── Геокодирование ─────────────────────────────────────────────
-@app.route('/geocode', methods=['POST','OPTIONS'])
+@app.route('/geocode', methods=['POST'])
 def geocode():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    try:
-        data  = request.json
-        city  = data.get('city', '')
-        year  = int(data.get('year', 2000))
-        month = int(data.get('month', 1))
-        day   = int(data.get('day', 1))
-        hour  = int(data.get('hour', 12))
+    data = request.json
+    city = data.get('city', '')
+    year = data.get('year', 2000)
+    month = data.get('month', 1)
+    day = data.get('day', 1)
+    hour = data.get('hour', 12)
 
-        # Геокодирование через Nominatim
-        resp = requests.get(
-            'https://nominatim.openstreetmap.org/search',
-            params={'q': city, 'format': 'json', 'limit': 1},
-            headers={'User-Agent': 'AstroConsultant/1.0'},
-            timeout=10
-        )
-        results = resp.json()
-        if not results:
-            return jsonify({"error": "Город не найден"}), 404
+    nom_url = "https://nominatim.openstreetmap.org/search"
+    nom_params = {"q": city, "format": "json", "limit": 1, "addressdetails": 1}
+    nom_headers = {"User-Agent": "AstroAgent/1.0"}
+    nom_resp = requests.get(nom_url, params=nom_params, headers=nom_headers, timeout=10)
+    nom_resp.raise_for_status()
+    results = nom_resp.json()
+    if not results:
+        return jsonify({"error": f"Город '{city}' не найден"}), 404
 
-        lat = float(results[0]['lat'])
-        lng = float(results[0]['lon'])
-        display_name = results[0]['display_name']
+    loc = results[0]
+    lat = float(loc['lat'])
+    lng = float(loc['lon'])
+    display_name = loc.get('display_name', city)
 
-        # Определяем timezone через timeapi.io
-        tz_resp = requests.get(
-            f'https://timeapi.io/api/timezone/coordinate?latitude={lat}&longitude={lng}',
-            timeout=10
-        )
-        tz_data = tz_resp.json()
-        tz_str = tz_data.get('timeZone', 'UTC')
+    tz_url = f"https://timeapi.io/api/timezone/coordinate?latitude={lat}&longitude={lng}"
+    tz_resp = requests.get(tz_url, timeout=10)
+    tz_resp.raise_for_status()
+    tz_data = tz_resp.json()
+    tz_str = tz_data.get('timeZone', 'UTC')
 
-        # Точный UTC offset на дату рождения
-        tz = pytz.timezone(tz_str)
-        birth_dt = datetime(year, month, day, hour, 0)
-        offset = tz.utcoffset(birth_dt)
-        gmt = offset.total_seconds() / 3600
+    tz = pytz.timezone(tz_str)
+    dt = datetime(int(year), int(month), int(day), int(hour), 0)
+    offset = tz.utcoffset(dt)
+    gmt = int(offset.total_seconds() / 3600)
 
-        return jsonify({
-            "lat": round(lat, 4),
-            "lng": round(lng, 4),
-            "gmt": gmt,
-            "tz_str": tz_str,
-            "display_name": display_name.split(',')[:3]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── Прокси для Groq API ────────────────────────────────────────
-@app.route('/chat', methods=['POST','OPTIONS'])
-def chat():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    try:
-        data = request.json
-        api_key = os.environ.get('GROQ_API_KEY', '')
-        if not api_key:
-            return jsonify({"error": "GROQ_API_KEY не настроен"}), 500
-
-        messages = [{"role": "system", "content": data.get('system', '') + "\n\n" + KNOWLEDGE_BASE}]
-        for m in data.get('messages', []):
-            messages.append({"role": m['role'], "content": m['content']})
-
-        resp = requests.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
-            json={"model": "llama-3.3-70b-versatile", "messages": messages, "max_tokens": 1000, "temperature": 0.7},
-            timeout=60
-        )
-        result = resp.json()
-        if 'choices' in result:
-            return jsonify({"content": [{"type": "text", "text": result['choices'][0]['message']['content']}]})
-        return jsonify({"error": str(result)}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"lat": lat, "lng": lng, "gmt": gmt, "tz_str": tz_str, "display_name": display_name})
 
 # ── Натальная карта ────────────────────────────────────────────
-@app.route('/natal', methods=['POST','OPTIONS'])
+@app.route('/natal', methods=['POST'])
 def natal():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
+    data = request.json
+    name    = data.get('name', 'User')
+    year    = int(data.get('year', 2000))
+    month   = int(data.get('month', 1))
+    day     = int(data.get('day', 1))
+    hour    = int(data.get('hour', 12))
+    minute  = int(data.get('minute', 0))
+    lat     = float(data.get('lat', 55.75))
+    lng     = float(data.get('lng', 37.62))
+    tz_str  = data.get('tz_str', 'Europe/Moscow')
+
+    subject = AstrologicalSubject(
+        name=name, year=year, month=month, day=day,
+        hour=hour, minute=minute,
+        lat=lat, lng=lng,
+        tz_str=tz_str,
+        houses_system_identifier="K"
+    )
+
+    SIGNS_RU = {
+        'Ari':'Овен','Tau':'Телец','Gem':'Близнецы','Can':'Рак',
+        'Leo':'Лев','Vir':'Дева','Lib':'Весы','Sco':'Скорпион',
+        'Sag':'Стрелец','Cap':'Козерог','Aqu':'Водолей','Pis':'Рыбы'
+    }
+
+    def sign_ru(s):
+        return SIGNS_RU.get(s, s)
+
+    planets_data = []
+    planet_names = ['Sun','Moon','Mercury','Venus','Mars','Jupiter','Saturn','Uranus','Neptune','Pluto','True_Node']
+    for pname in planet_names:
+        try:
+            p = getattr(subject, pname.lower().replace(' ','_').replace('true_node','true_node'), None)
+            if p is None and pname == 'True_Node':
+                p = subject.true_node
+            if p:
+                planets_data.append({
+                    "name": pname,
+                    "sign": p.sign,
+                    "sign_ru": sign_ru(p.sign),
+                    "degree": p.abs_pos,
+                    "norm_degree": p.position,
+                    "house": p.house_name,
+                    "retrograde": p.retrograde
+                })
+        except:
+            pass
+
+    houses_data = []
+    house_names = ['First_House','Second_House','Third_House','Fourth_House','Fifth_House','Sixth_House',
+                   'Seventh_House','Eighth_House','Ninth_House','Tenth_House','Eleventh_House','Twelfth_House']
+    for i, hname in enumerate(house_names, 1):
+        try:
+            h = getattr(subject, hname.lower(), None)
+            if h:
+                houses_data.append({
+                    "house": i,
+                    "sign": h.sign,
+                    "degree": h.abs_pos,
+                    "norm_degree": h.position
+                })
+        except:
+            pass
+
+    aspects_data = []
     try:
-        data   = request.json
-        name   = data.get('name', 'Client')
-        year   = int(data['year'])
-        month  = int(data['month'])
-        day    = int(data['day'])
-        hour   = int(data['hour'])
-        minute = int(data['minute'])
-        lat    = float(data['lat'])
-        lng    = float(data['lng'])
-        tz_str = data.get('tz_str', 'UTC')
+        from kerykeion import NatalAspects
+        aspects = NatalAspects(subject)
+        for a in aspects.all_aspects:
+            aspects_data.append({
+                "planet1": a.p1_name,
+                "planet2": a.p2_name,
+                "type": a.aspect,
+                "orb": round(abs(a.orbit), 2)
+            })
+    except:
+        pass
 
-        subject = AstrologicalSubjectFactory.from_birth_data(
-            name=name, year=year, month=month, day=day,
-            hour=hour, minute=minute,
-            lat=lat, lng=lng, tz_str=tz_str,
-            houses_system_identifier="K", online=False
-        )
+    asc = subject.first_house
+    mc  = subject.tenth_house
 
-        def fmt(p, pname):
-            return {"name": pname, "sign": getattr(p,'sign',''), "sign_ru": SIGN_RU.get(getattr(p,'sign',''),''),
-                    "degree": round(getattr(p,'position',0.0),4), "norm_degree": round(getattr(p,'position',0.0)%30,4),
-                    "house": str(getattr(p,'house',1)), "retrograde": bool(getattr(p,'retrograde',False))}
+    return jsonify({
+        "planets": planets_data,
+        "houses": houses_data,
+        "aspects": aspects_data,
+        "ascendant": {"sign": asc.sign, "sign_ru": sign_ru(asc.sign), "degree": asc.abs_pos},
+        "midheaven": {"sign": mc.sign,  "sign_ru": sign_ru(mc.sign),  "degree": mc.abs_pos}
+    })
 
-        node = getattr(subject,'true_node',None) or getattr(subject,'mean_node',None) or getattr(subject,'north_node',None)
-        planets = [fmt(subject.sun,"Sun"), fmt(subject.moon,"Moon"), fmt(subject.mercury,"Mercury"),
-                   fmt(subject.venus,"Venus"), fmt(subject.mars,"Mars"), fmt(subject.jupiter,"Jupiter"),
-                   fmt(subject.saturn,"Saturn"), fmt(subject.uranus,"Uranus"), fmt(subject.neptune,"Neptune"),
-                   fmt(subject.pluto,"Pluto")]
-        if node: planets.append(fmt(node,"North Node"))
+# ── Чат с базой знаний ─────────────────────────────────────────
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.json
+    messages  = data.get('messages', [])
+    chart_ctx = data.get('chart_context', '')
 
-        houses = []
-        for i,attr in enumerate(['first_house','second_house','third_house','fourth_house','fifth_house','sixth_house',
-                                   'seventh_house','eighth_house','ninth_house','tenth_house','eleventh_house','twelfth_house'],1):
-            h = getattr(subject, attr)
-            houses.append({"house":i,"sign":getattr(h,'sign',''),"sign_ru":SIGN_RU.get(getattr(h,'sign',''),''),"degree":round(getattr(h,'position',0.0),4)})
+    # Поиск релевантных отрывков из книг
+    last_user_msg = ""
+    for m in reversed(messages):
+        if m.get('role') == 'user':
+            last_user_msg = m.get('content', '')
+            break
 
-        ASPS = [("conjunction",0,8),("opposition",180,8),("trine",120,7),("square",90,7),("sextile",60,5)]
-        lons = [(p["name"], p["degree"]) for p in planets]
-        aspects = []
-        for i in range(len(lons)):
-            for j in range(i+1,len(lons)):
-                diff = abs(lons[i][1]-lons[j][1])
-                if diff>180: diff=360-diff
-                for aname,aangle,aorb in ASPS:
-                    orb=abs(diff-aangle)
-                    if orb<=aorb:
-                        aspects.append({"planet1":lons[i][0],"planet2":lons[j][0],"type":aname,"orb":round(orb,2)}); break
-        aspects.sort(key=lambda x:x['orb'])
+    knowledge = ""
+    if last_user_msg:
+        knowledge = search_knowledge(last_user_msg)
 
-        asc,mc = subject.first_house, subject.tenth_house
-        return jsonify({"planets":planets,"houses":houses,"aspects":aspects,
-            "ascendant":{"sign":asc.sign,"sign_ru":SIGN_RU.get(asc.sign,''),"degree":round(asc.position,4)},
-            "midheaven":{"sign":mc.sign,"sign_ru":SIGN_RU.get(mc.sign,''),"degree":round(mc.position,4)}})
-    except Exception as e:
-        import traceback
-        return jsonify({"error":str(e),"trace":traceback.format_exc()}), 500
+    knowledge_block = ""
+    if knowledge:
+        knowledge_block = f"""
+
+═══ ЗНАНИЯ ИЗ КНИГ ШЕСТОПАЛОВА ═══
+{knowledge}
+═══════════════════════════════════
+Используй эти знания как основу для ответа. Ссылайся на них естественно, не цитируй дословно.
+"""
+
+    system_prompt = f"""Ты — профессиональный астролог-консультант, глубоко знающий систему Шестопалова.
+Говоришь по-русски, тепло и профессионально. Используешь астрологическую символику.
+Опираешься на систему домов Кох.
+
+НАТАЛЬНАЯ КАРТА КЛИЕНТА:
+{chart_ctx}
+{knowledge_block}
+Давай конкретные, персональные интерпретации на основе карты и знаний из книг."""
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "max_tokens": 1000,
+        "messages": [{"role": "system", "content": system_prompt}] + messages
+    }
+    r = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                      headers=headers, json=payload, timeout=30)
+    r.raise_for_status()
+    reply = r.json()["choices"][0]["message"]["content"]
+    return jsonify({"reply": reply})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

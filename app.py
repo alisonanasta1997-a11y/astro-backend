@@ -109,22 +109,25 @@ def natal():
         return SIGNS_RU.get(s, s)
 
     planets_data = []
-    planet_names = ['Sun','Moon','Mercury','Venus','Mars','Jupiter','Saturn','Uranus','Neptune','Pluto','True_Node']
-    for pname in planet_names:
+    planet_map = {
+        'Sun': subject.sun, 'Moon': subject.moon,
+        'Mercury': subject.mercury, 'Venus': subject.venus,
+        'Mars': subject.mars, 'Jupiter': subject.jupiter,
+        'Saturn': subject.saturn, 'Uranus': subject.uranus,
+        'Neptune': subject.neptune, 'Pluto': subject.pluto,
+        'True_Node': subject.true_node
+    }
+    for pname, p in planet_map.items():
         try:
-            p = getattr(subject, pname.lower().replace(' ','_').replace('true_node','true_node'), None)
-            if p is None and pname == 'True_Node':
-                p = subject.true_node
-            if p:
-                planets_data.append({
-                    "name": pname,
-                    "sign": p.sign,
-                    "sign_ru": sign_ru(p.sign),
-                    "degree": p.abs_pos,
-                    "norm_degree": p.position,
-                    "house": p.house_name,
-                    "retrograde": p.retrograde
-                })
+            planets_data.append({
+                "name": pname,
+                "sign": p.sign,
+                "sign_ru": sign_ru(p.sign),
+                "degree": p.abs_pos,
+                "norm_degree": p.position,
+                "house": p.house_name,
+                "retrograde": p.retrograde
+            })
         except:
             pass
 

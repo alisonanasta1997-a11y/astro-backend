@@ -109,8 +109,9 @@ def natal():
         return SIGNS_RU.get(s, s)
 
     planets_data = []
-    for p in subject.planets_list:
+    for pname in ['sun','moon','mercury','venus','mars','jupiter','saturn','uranus','neptune','pluto','true_node']:
         try:
+            p = getattr(subject, pname)
             planets_data.append({
                 "name": p.name,
                 "sign": p.sign,
@@ -124,10 +125,13 @@ def natal():
             pass
 
     houses_data = []
-    for h in subject.houses_list:
+    for i, hname in enumerate(['first_house','second_house','third_house','fourth_house',
+                                'fifth_house','sixth_house','seventh_house','eighth_house',
+                                'ninth_house','tenth_house','eleventh_house','twelfth_house'], 1):
         try:
+            h = getattr(subject, hname)
             houses_data.append({
-                "house": h.house_number if hasattr(h,'house_number') else int(h.name.split('_')[0]) if h.name[0].isdigit() else 1,
+                "house": i,
                 "sign": h.sign,
                 "degree": h.abs_pos,
                 "norm_degree": h.position

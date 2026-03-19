@@ -128,17 +128,19 @@ def natal():
     for pname in ['sun','moon','mercury','venus','mars','jupiter','saturn','uranus','neptune','pluto','true_node']:
         try:
             p = getattr(subject, pname)
+            # kerykeion v5: house attribute name varies
+            house_val = getattr(p, 'house', None) or getattr(p, 'house_name', None) or getattr(p, 'house_number', None) or 1
             planets_data.append({
                 "name": p.name,
                 "sign": p.sign,
                 "sign_ru": sign_ru(p.sign),
                 "degree": p.abs_pos,
                 "norm_degree": p.position,
-                "house": p.house_name,
+                "house": house_val,
                 "retrograde": p.retrograde
             })
-        except:
-            pass
+        except Exception as e:
+            print(f"Planet {pname} error: {e}")
 
     houses_data = []
     for i, hname in enumerate(['first_house','second_house','third_house','fourth_house',
@@ -152,8 +154,8 @@ def natal():
                 "degree": h.abs_pos,
                 "norm_degree": h.position
             })
-        except:
-            pass
+        except Exception as e:
+            print(f"House {hname} error: {e}")
 
     aspects_data = []
     try:

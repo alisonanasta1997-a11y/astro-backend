@@ -109,18 +109,10 @@ def natal():
         return SIGNS_RU.get(s, s)
 
     planets_data = []
-    planet_map = {
-        'Sun': subject.sun, 'Moon': subject.moon,
-        'Mercury': subject.mercury, 'Venus': subject.venus,
-        'Mars': subject.mars, 'Jupiter': subject.jupiter,
-        'Saturn': subject.saturn, 'Uranus': subject.uranus,
-        'Neptune': subject.neptune, 'Pluto': subject.pluto,
-        'True_Node': subject.true_node
-    }
-    for pname, p in planet_map.items():
+    for p in subject.planets_list:
         try:
             planets_data.append({
-                "name": pname,
+                "name": p.name,
                 "sign": p.sign,
                 "sign_ru": sign_ru(p.sign),
                 "degree": p.abs_pos,
@@ -132,18 +124,14 @@ def natal():
             pass
 
     houses_data = []
-    house_names = ['First_House','Second_House','Third_House','Fourth_House','Fifth_House','Sixth_House',
-                   'Seventh_House','Eighth_House','Ninth_House','Tenth_House','Eleventh_House','Twelfth_House']
-    for i, hname in enumerate(house_names, 1):
+    for h in subject.houses_list:
         try:
-            h = getattr(subject, hname.lower(), None)
-            if h:
-                houses_data.append({
-                    "house": i,
-                    "sign": h.sign,
-                    "degree": h.abs_pos,
-                    "norm_degree": h.position
-                })
+            houses_data.append({
+                "house": h.house_number if hasattr(h,'house_number') else int(h.name.split('_')[0]) if h.name[0].isdigit() else 1,
+                "sign": h.sign,
+                "degree": h.abs_pos,
+                "norm_degree": h.position
+            })
         except:
             pass
 
